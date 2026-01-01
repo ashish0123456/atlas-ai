@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 class QueryRequest(BaseModel):
     question: str
@@ -8,3 +8,4 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     confidence: Optional[float] = None
+    contexts: Optional[List[Dict[str, Any]]] = None
