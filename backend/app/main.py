@@ -3,6 +3,8 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.observability.tracing import generate_trace_id
 from app.observability.logger import JsonLogger
+from app.auth.api_key import validate_api_key
+from app.auth.rate_limit import rate_limit
 
 logger = JsonLogger("GenAI backend")
 
@@ -34,5 +36,13 @@ async def tracing_middleware(request: Request, call_next):
     )
 
     return response
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if request.url.path.startswith("/query"):
+        validate_api_key(request)
+        rate_limit(request)
+
+    return await call_next(request)
 
 app.include_router(api_router)

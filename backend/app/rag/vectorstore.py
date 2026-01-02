@@ -1,6 +1,7 @@
 import faiss
 from pathlib import Path
 import pickle
+import numpy as np
 
 VECTOR_STORE_PATH = Path("storage/vectorstore/index.faiss")
 META_PATH = Path("storage/vectorstore/meta.pkl")
@@ -17,7 +18,8 @@ class VectorStore:
             self.metadata = []
 
     def add(self, vectors: list[list[float]], metadatas: list[dict]):
-        self.index.add(faiss.vector_to_array(vectors).reshape(len(vectors), self.dim))
+        vectors_np = np.array(vectors, dtype="float32")
+        self.index.add(faiss.vector_to_array(vectors_np).reshape(len(vectors_np), self.dim))
         self.metadata.extend(metadatas)
         self._persist()
 
