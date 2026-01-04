@@ -9,3 +9,4 @@ class QueryResponse(BaseModel):
     answer: str
     confidence: Optional[float] = None
     contexts: Optional[List[Dict[str, Any]]] = None
+    quality_score: Optional[float] = None

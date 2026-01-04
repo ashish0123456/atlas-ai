@@ -1,9 +1,11 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
+pydantic-settings
 python-dotenv
 httpx
 sentence-transformers
 faiss-cpu
 python-multipart
 pypdf
+aiofiles
