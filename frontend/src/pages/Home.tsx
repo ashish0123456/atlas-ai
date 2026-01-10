@@ -24,7 +24,7 @@ export default function Home() {
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
     const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
-    const [documents, setDocuments] = useState<Document[]>([]);
+    const [_documents, setDocuments] = useState<Document[]>([]);
     const [progress, setProgress] = useState<ProgressStage[]>([]);
     const [currentStage, setCurrentStage] = useState<string | null>(null);
 
@@ -106,9 +106,9 @@ export default function Home() {
         setCurrentStage(null);
 
         // Use streaming API for real-time progress
-        const cleanup = apiClient.queryAIStream(
+        apiClient.queryAIStream(
             question.trim(),
-            (stage, message, data) => {
+            (stage, message) => {
                 setCurrentStage(stage);
                 setProgress((prev) => [
                     ...prev,
@@ -156,10 +156,13 @@ export default function Home() {
                 {/* Header */}
                 <div className="text-center mb-10">
                     <h1 className="text-5xl font-bold text-white mb-3 drop-shadow-lg">
-                        Atlas AI
+                        Docent
                     </h1>
                     <p className="text-white/90 text-lg">
                         Upload documents and ask questions powered by RAG
+                    </p>
+                    <p className="text-white/60 text-sm mt-1">
+                        A contextual search engine for document-based question answering
                     </p>
                 </div>
 

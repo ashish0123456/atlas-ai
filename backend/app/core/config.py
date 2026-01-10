@@ -4,7 +4,7 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    APP_NAME: str = "Atlas AI"
+    APP_NAME: str = "Docent"
     API_KEYS: str = ""
     ENV: str = "local"
     DEBUG: bool = True
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
     ]
-    OLLAMA_URL: str = "http://localhost:11434"
+    OLLAMA_URL: str = "http://host.docker.internal:11434"
     OLLAMA_MODEL: str = "phi3"
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     EMBEDDING_DIM: int = 384
