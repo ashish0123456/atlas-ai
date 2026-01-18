@@ -1,0 +1,363 @@
+name: Build, Test & Deploy
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: false
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+  BACKEND_IMAGE_NAME: docent-ai-backend
+  FRONTEND_IMAGE_NAME: docent-ai-frontend
+
+jobs:
+  # ========== TESTING JOBS ==========
+  backend-tests:
+    name: Backend Tests & Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-cov flake8 black isort
+      
+      - name: Lint with flake8
+        run: |
+          flake8 backend/app --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 backend/app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      
+      - name: Check code formatting with black
+        run: |
+          black --check backend/app
+      
+      - name: Check import sorting with isort
+        run: |
+          isort --check-only backend/app
+      
+      - name: Run backend tests
+        run: |
+          pytest backend/tests -v --cov=backend/app --cov-report=xml
+        continue-on-error: true
+      
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: backend
+        continue-on-error: true
+
+  frontend-tests:
+    name: Frontend Tests & Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      
+      - name: Lint with ESLint
+        working-directory: frontend
+        run: npm run lint
+      
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test
+        continue-on-error: true
+
+  # ========== BUILD JOBS ==========
+  build-backend-image:
+    name: Build Backend Docker Image
+    runs-on: ubuntu-latest
+    needs: backend-tests
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Generate image tags
+        id: image-tags
+        run: |
+          COMMIT_SHA=${{ github.sha }}
+          SHORT_SHA=${COMMIT_SHA:0:7}
+          
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref #refs/tags/ }}"
+          else
+            TAG="${{ github.ref #refs/heads/ }}-${SHORT_SHA}"
+          fi
+          
+          echo "backend_tag=${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG}" >> $GITHUB_OUTPUT
+          echo "backend_latest=${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+      
+      - name: Build and push backend image to ECR
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.image-tags.outputs.backend_tag }}
+            ${{ steps.image-tags.outputs.backend_latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-frontend-image:
+    name: Build Frontend Docker Image
+    runs-on: ubuntu-latest
+    needs: frontend-tests
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Generate image tags
+        id: image-tags
+        run: |
+          COMMIT_SHA=${{ github.sha }}
+          SHORT_SHA=${COMMIT_SHA:0:7}
+          
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref #refs/tags/ }}"
+          else
+            TAG="${{ github.ref #refs/heads/ }}-${SHORT_SHA}"
+          fi
+          
+          echo "frontend_tag=${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG}" >> $GITHUB_OUTPUT
+          echo "frontend_latest=${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+      
+      - name: Build and push frontend image to ECR
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ steps.image-tags.outputs.frontend_tag }}
+            ${{ steps.image-tags.outputs.frontend_latest }}
+          build-args: |
+            VITE_API_BASE=${{ secrets.VITE_API_BASE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ========== DEPLOYMENT JOBS ==========
+  deploy:
+    name: Deploy to AWS ECS
+    runs-on: ubuntu-latest
+    needs: [build-backend-image, build-frontend-image]
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))) ||
+      github.event_name == 'workflow_dispatch'
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Generate image tags
+        id: image-tags
+        run: |
+          COMMIT_SHA=${{ github.sha }}
+          SHORT_SHA=${COMMIT_SHA:0:7}
+          
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref #refs/tags/ }}"
+          else
+            TAG="${{ github.ref #refs/heads/ }}-${SHORT_SHA}"
+          fi
+          
+          echo "backend_tag=${{ env.ECR_REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${TAG}" >> $GITHUB_OUTPUT
+          echo "frontend_tag=${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${TAG}" >> $GITHUB_OUTPUT
+      
+      - name: Fill in backend image in task definition
+        id: task-def-backend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: backend-task-definition.json
+          container-name: ${{ env.BACKEND_IMAGE_NAME }}
+          image: ${{ steps.image-tags.outputs.backend_tag }}
+      
+      - name: Fill in frontend image in task definition
+        id: task-def-frontend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def-backend.outputs.task-definition }}
+          container-name: ${{ env.FRONTEND_IMAGE_NAME }}
+          image: ${{ steps.image-tags.outputs.frontend_tag }}
+      
+      - name: Deploy to Amazon ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def-frontend.outputs.task-definition }}
+          service: docent-ai-service
+          cluster: docent-ai-cluster
+          wait-for-service-stability: true
+
+  # ========== SMOKE TESTS ==========
+  smoke-tests:
+    name: Run Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: success()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Wait for deployment to stabilize
+        run: sleep 30
+      
+      - name: Health check - Backend API
+        run: |
+          for i in {1..30}; do
+            if curl -f "${{ secrets.API_URL }}/api/v1/health"; then
+              echo "Backend health check passed"
+              exit 0
+            fi
+            echo "Attempt $i/30 - Waiting for backend..."
+            sleep 10
+          done
+          echo "Backend health check failed"
+          exit 1
+      
+      - name: Health check - Frontend
+        run: |
+          for i in {1..30}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.FRONTEND_URL }}")
+            if [ "$STATUS" == "200" ]; then
+              echo "Frontend health check passed"
+              exit 0
+            fi
+            echo "Attempt $i/30 - Waiting for frontend... (Status: $STATUS)"
+            sleep 10
+          done
+          echo "Frontend health check failed"
+          exit 1
+      
+      - name: Test API endpoints
+        run: |
+          echo "Testing API endpoints..."
+          curl -f "${{ secrets.API_URL }}/api/v1/health" || exit 1
+          echo "All smoke tests passed"
+
+  # ========== NOTIFICATION ==========
+  notify:
+    name: Notify on Completion
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [backend-tests, frontend-tests, build-backend-image, build-frontend-image, deploy, smoke-tests]
+    
+    steps:
+      - name: Determine workflow status
+        id: status
+        run: |
+          TESTS_STATUS="${{ needs.backend-tests.result }}-${{ needs.frontend-tests.result }}"
+          BUILD_STATUS="${{ needs.build-backend-image.result }}-${{ needs.build-frontend-image.result }}"
+          DEPLOY_STATUS="${{ needs.deploy.result }}"
+          SMOKE_STATUS="${{ needs.smoke-tests.result }}"
+          
+          if [[ "$TESTS_STATUS" == "success-success" && "$BUILD_STATUS" == "success-success" && "$DEPLOY_STATUS" == "success" && "$SMOKE_STATUS" == "success" ]]; then
+            echo "status=SUCCESS" >> $GITHUB_OUTPUT
+            echo "message=Build, test, and deployment completed successfully!" >> $GITHUB_OUTPUT
+          else
+            echo "status=FAILED" >> $GITHUB_OUTPUT
+            echo "message=Workflow failed. Check logs for details." >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Print workflow summary
+        run: |
+          echo "================================"
+          echo "Workflow Status: ${{ steps.status.outputs.status }}"
+          echo "================================"
+          echo "Backend Tests: ${{ needs.backend-tests.result }}"
+          echo "Frontend Tests: ${{ needs.frontend-tests.result }}"
+          echo "Backend Build: ${{ needs.build-backend-image.result }}"
+          echo "Frontend Build: ${{ needs.build-frontend-image.result }}"
+          echo "Deployment: ${{ needs.deploy.result }}"
+          echo "Smoke Tests: ${{ needs.smoke-tests.result }}"
+          echo "================================"
+          echo "${{ steps.status.outputs.message }}"
